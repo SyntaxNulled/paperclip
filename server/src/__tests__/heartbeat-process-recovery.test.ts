@@ -6424,14 +6424,28 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0]).toMatchObject({ status: "blocked", assigneeAgentId: agentId });
   });
 
-  it("converts a continuation parked for review into a dependency wait on its open sub-tasks", async () => {
-    const { companyId, agentId, issueId } = await seedStrandedIssueFixture({
+  it.each([false, "receipt", "launch", "provider", "cleanup"])("converts a continuation parked for review into a dependency wait on its open sub-tasks (dispatch receipt: %s)", async dispatchReceipt => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
       status: "in_progress",
       runStatus: "cancelled",
       retryReason: "issue_continuation_needed",
       runErrorCode: "issue_continuation_waiting_on_review",
       runError: "Continuation parked: issue is waiting on review/approval",
     });
+    if (dispatchReceipt) {
+      const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+      await db.update(heartbeatRuns).set({ startedAt: null,
+        resultJson: { stopReason: "issue_continuation_waiting_on_review", timeoutSource: "stale_queued_run_gate" },
+      }).where(eq(heartbeatRuns.id, run.id));
+    }
+    if (dispatchReceipt === "launch" || dispatchReceipt === "provider") {
+      await db.insert(heartbeatRunEvents).values({ companyId, runId, agentId, seq: 1,
+        eventType: dispatchReceipt === "launch" ? "native.process_start_requested" : "provider.event",
+        stream: "system", level: "info", message: "Contradictory execution evidence" });
+    } else if (dispatchReceipt === "cleanup") {
+      await db.insert(environmentLeases).values({ companyId, heartbeatRunId: runId,
+        provider: "local", status: "pending_cleanup", cleanupStatus: "failed" });
+    }
     const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
     const openChildTodoId = randomUUID();
     const openChildInProgressId = randomUUID();
@@ -6473,6 +6487,14 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const heartbeat = heartbeatService(db);
     const result = await heartbeat.reconcileStrandedAssignedIssues();
 
+    if (dispatchReceipt && dispatchReceipt !== "receipt") {
+      expect(result.waitingOnReviewResolved).toBe(0);
+      expect(result.escalated).toBe(1);
+      expect(await getExecutionBlocker(db, companyId, issueId)).toMatchObject({
+        cause: "legacy_execution_requires_reconciliation", runId, canRetry: false,
+      });
+      return;
+    }
     expect(result.waitingOnReviewResolved).toBe(1);
     expect(result.escalated).toBe(0);
     expect(result.issueIds).toEqual([issueId]);

@@ -7740,12 +7740,12 @@ registry.registerPath({
   method: "patch",
   path: "/api/companies/{companyId}/skills/{skillId}/files",
   tags: ["skills"],
-  summary: "Update a skill file",
+  summary: "Update a skill file (optional expectedVersionId and idempotencyKey guard agent retries)",
   request: {
     params: z.object({ companyId: z.string(), skillId: z.string() }),
     body: jsonBody(companySkillFileUpdateSchema),
   },
-  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 409: r.conflict },
 });
 
 registry.registerPath({

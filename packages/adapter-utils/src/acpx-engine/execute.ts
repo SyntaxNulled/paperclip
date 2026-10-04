@@ -1,4 +1,5 @@
 import { cancellableSandboxStartup } from "./startup-cancellation.js";
+import { withAdapterExecutionPhase, type AdapterExecutionPhase } from "../execution-phase.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -6,6 +7,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
+import { parseFrontmatterMarkdown } from "@paperclipai/shared";
 import { fileURLToPath } from "node:url";
 import type {
   AdapterBillingType,
@@ -84,6 +86,7 @@ import {
   type PaperclipSkillEntry,
 } from "@paperclipai/adapter-utils/server-utils";
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
+import { createEphemeralSessionEnvironmentStore } from "./ephemeral-session-environment.js";
 import {
   createAcpRuntime,
   createAgentRegistry,
@@ -99,7 +102,6 @@ import {
   type AcpRuntimeTurnResult,
   type AcpRuntimeUsageBreakdown,
   type AcpRuntimeUsageCost,
-  type AcpSessionStore,
 } from "acpx/runtime";
 import {
   ACPX_DUPLEX_LOSS_CANCEL_DEADLINE_MS,
@@ -1182,11 +1184,24 @@ async function prepareClaudeSkillRuntime(input: {
   }
 
   const selectedNames = materializedNames.sort();
+  const skillDescriptions = await Promise.all(selectedNames.map(async (name) => {
+    const file = path.join(skillsHome, name, "SKILL.md");
+    let description = "";
+    try {
+      const parsed = parseFrontmatterMarkdown(await fs.readFile(file, "utf8"));
+      description = asString(parsed.frontmatter.description, "").replace(/\s+/g, " ").trim().slice(0, 512);
+    } catch {
+      // A readable skill without valid routing metadata remains available.
+      // Do not substitute its body for a missing description.
+    }
+    return `- ${name}${description ? `: ${description}` : ""} (file: ${file})`;
+  }));
   const promptInstructions = selectedNames.length > 0
     ? [
         "Paperclip has materialized selected runtime skills for this ACPX Claude session.",
         `Skill root: ${skillsHome}`,
         `Selected skills: ${selectedNames.join(", ")}`,
+        ...skillDescriptions,
         "When a task calls for one of these skills, read its SKILL.md from that root and follow it.",
       ].join("\n")
     : "";
@@ -4079,9 +4094,9 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             : teardownErr instanceof Error
               ? teardownErr.message
               : String(teardownErr);
-        await ctx
+        await withAdapterExecutionPhase(ctx, "phase_reporting", () => ctx
           .onLog("stderr", `[paperclip] ACPX teardown step "${step}" failed: ${reason}\n`)
-          .catch(() => {});
+          .catch(() => {}));
       };
       // Emit one per-phase timing run-log event. It is not an OpenTelemetry
       // export and it is not a Telemetry event: it carries the phase name
@@ -4092,15 +4107,15 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         emitRunPhaseTiming(ctx, phase, now() - startMs, outcome);
       // Time a settlement step and emit its phase timing on every path. A step
       // error still emits `failed` before it re-throws to the Phase 3 error policy.
-      const timedPhase = async (phase: string, run: () => Promise<void> | void): Promise<void> => {
+      const timedPhase = async (phase: AdapterExecutionPhase, run: () => Promise<void> | void): Promise<void> => {
         const start = now();
         try {
-          await run();
+          await withAdapterExecutionPhase(ctx, phase, run);
         } catch (error) {
-          await emitPhase(phase, start, "failed");
+          await withAdapterExecutionPhase(ctx, "phase_reporting", () => emitPhase(phase, start, "failed"));
           throw error;
         }
-        await emitPhase(phase, start, "ok");
+        await withAdapterExecutionPhase(ctx, "phase_reporting", () => emitPhase(phase, start, "ok"));
       };
       // The turn the run started. It is hoisted to the run scope so the settlement
       // `endSession` step can cancel a running turn before it closes the runtime
@@ -4248,26 +4263,9 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         flushChildStderr(childStderrState);
         childStderrState.logPath = prepared.childStderrLogPath;
         const persistedRuntimeStore = createRuntimeStore({ stateDir: prepared.stateDir });
-        const runtimeStore: AcpSessionStore = {
-          async load(id) {
-            const record = await persistedRuntimeStore.load(id);
-            if (!record) return undefined;
-            // ACPX resumes from the stored session options rather than the
-            // options passed to ensureSession. Keep conversation state, but
-            // launch the provider with this run's credentials and scratch paths.
-            return {
-              ...record,
-              acpx: {
-                ...record.acpx,
-                session_options: {
-                  ...record.acpx?.session_options,
-                  env: { ...prepared.env },
-                },
-              },
-            };
-          },
-          save: (record) => persistedRuntimeStore.save(record),
-        };
+        // Resume with this run's launch environment; keep it out of the saved
+        // conversation record without mutating the live runtime's options.
+        const runtimeStore = createEphemeralSessionEnvironmentStore(persistedRuntimeStore, prepared.env);
         const runtimeOptions: PaperclipAcpRuntimeOptions = {
           cwd: prepared.cwd,
           // Host-only spawn cwd for the relay proxy on the remote process-session
@@ -4860,7 +4858,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         if (ctx.signal?.aborted) armStopDeadline();
         return {
           cancel: async (reason: string) => {
-            await turn.cancel({ reason });
+            await withAdapterExecutionPhase(ctx, "cancel_turn", () => turn.cancel({ reason }));
           },
         };
       };
@@ -5314,7 +5312,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             : baseSettlement;
           // Cancel a running turn before the close (the turn-error path).
           if (settlement.cancelTurnReason && activeTurn) {
-            await activeTurn.cancel({ reason: settlement.cancelTurnReason }).catch(() => {});
+            await withAdapterExecutionPhase(ctx, "cancel_turn", () => activeTurn!.cancel({ reason: settlement.cancelTurnReason! }).catch(() => {}));
           }
           const existing = warmHandles.get(prepared.sessionKey);
           // Re-read the duplex control-channel disposition here, at the
@@ -5353,26 +5351,26 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           ) {
             // A matching warm entry closes through the warm store, which also
             // clears its idle timer and flushes its child stderr.
-            runtimeStopConfirmed = await closeWarmHandle({
+            runtimeStopConfirmed = await withAdapterExecutionPhase(ctx, "close_session", () => closeWarmHandle({
               handles: warmHandles,
               key: prepared.sessionKey,
               entry: existing,
               reason: settlement.reason,
               discardPersistentState: settlement.discardPersistentState,
-            });
+            }));
             return;
           }
           const onCloseError = settlement.recordCloseError || ctx.signal?.aborted
             ? (closeErr: unknown) => recordTeardownError("runtime-close", closeErr)
             : () => {};
-          await runtime
+          await withAdapterExecutionPhase(ctx, "close_session", () => runtime
             .close({
               handle: settlement.handle,
               reason: settlement.reason,
               discardPersistentState: settlement.discardPersistentState,
             })
             .then(() => { runtimeStopConfirmed = true; })
-            .catch(onCloseError);
+            .catch(onCloseError));
           if (settlement.dropWarmEntry && warmHandleMatches(existing, runtime, settlement.handle) && existing) {
             clearWarmHandleTimer(existing);
             warmHandles.delete(prepared.sessionKey);
@@ -5403,18 +5401,18 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           // mutable provider files. Require the owned close or local OS handle.
           const stopped = runtimeStopConfirmed || (!prepared.processSessionBridge && capturedProcessExited(processIdentitySink?.localProcess));
           try {
-            if (stopped) await ctx.onProviderStopped?.();
+            if (stopped) await withAdapterExecutionPhase(ctx, "instruction_collection", () => ctx.onProviderStopped?.());
           } catch {
             // Match ACP's fail-soft teardown policy without describing this as
             // a workspace restore failure or exposing paths from a raw error.
             await recordTeardownError("instruction-collection", new Error("Instruction collection failed after provider stop. No instruction save is claimed."));
           } finally {
-            await runRuntimeSpan("sandbox.syncBack", async () => {
+            await withAdapterExecutionPhase(ctx, "workspace_restore", () => runRuntimeSpan("sandbox.syncBack", async () => {
               const restoreOutcome = await syncBackManagedHome(prepared);
               if (!restoreOutcome.ok) {
                 workspaceRestoreFailureField = { workspaceRestoreFailure: restoreOutcome.code };
               }
-            });
+            }));
           }
         }),
         // The staging lease releases as the run's final act, AFTER the coordinator
@@ -5483,6 +5481,15 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
               } },
             };
           }
+          // Preserve the policy resolved for this execution target. The server
+          // cannot reconstruct sandbox defaults from the stored agent config.
+          capturedResult = {
+            ...capturedResult,
+            resultJson: {
+              ...capturedResult.resultJson,
+              adapterExecutionTimeout: { ...prepared.timeoutResolution },
+            },
+          };
           // The sync-back settlement step runs before this reproduces the result
           // (settlement precedes reproduction), so a failed workspace restore is
           // already recorded by the time we get here. Merge it into `resultJson`

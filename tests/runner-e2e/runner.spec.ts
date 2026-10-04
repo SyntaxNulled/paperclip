@@ -1,3 +1,7 @@
+import { assertNativeCompletionSelection, NATIVE_COMPLETION_PREFLIGHT_ENV, verifyNativeCompletionPreflight } from "./native-completion-admission.js";
+import { captureNativeDefault, gradeNativeDefault, nativeCompletionWorkspaceDigest } from "./native-completion-defaults.js";
+import { gradeNativeCompletion } from "./native-completion-scoring.js";
+import { assertNativeBlockerReply } from "./native-blocker-visible.js";
 import { warmManagedFileEvidence } from "./warm-managed-files.js";
 import { gitFinalizationEvidence, gitStreamingEvidence, setupGitStreamingWorkspace } from "./daytona-git-streaming.js";
 import { runsCompletionUpdateProbe, completionQualityControls, completionQualityStatus, judgeCompletionQuality, reserveCompletionQuality, type CompletionQualityRecord } from "./completion-quality.js";
@@ -14,6 +18,8 @@ import { runContinuationFlow } from "./continuation-flow.js";
 import { runEverydayFlow } from "./everyday-flow.js";
 import { gradeTaskTitle } from "./task-titles.js";
 import { runContextIntegrityFlow } from "./context-integrity-flow.js";
+import { captureStockHarness, gradeStockHarness, gradeStockHire } from "./stock-harness.js";
+import { verifyStockHarnessPreflight, STOCK_PREFLIGHT_ENV } from "./stock-harness-admission.js";
 import { createTaskThroughUi, submitTaskReply } from "./user-actions.js";
 
 import { runFirstTaskFlow, setupFirstTaskFixtures } from "./first-task-flow.js";
@@ -552,6 +558,10 @@ for (const execution of executions) {
     let apiResponseSourceId: string | undefined;
     let titleCreation: { issue: unknown; submitted: unknown } | undefined;
     let lifecycleBlockerId: string | null = null;
+    if (execution.suite.id === "native-completion") {
+      assertNativeCompletionSelection([execution]);
+      verifyNativeCompletionPreflight(process.env[NATIVE_COMPLETION_PREFLIGHT_ENV]);
+    }
     const credentials = credentialValues();
     const secrets = normalizedSecrets(Object.values(credentials));
     const api = new RunnerApi(request);
@@ -560,6 +570,9 @@ for (const execution of executions) {
     const networkDiagnostics: Array<Record<string, unknown>> = [];
     const pageLifecycleDiagnostics: Array<Record<string, unknown>> = [];
     const browserBootstrap = observeBrowserBootstrap(page);
+    let nativeInitial: { issueIds: string[]; agentIds: string[]; workspaceDigest: string | null } | undefined;
+    const nativeWorkspaceDigest = () => execution.task.id === "native-blocked-report"
+      ? nativeCompletionWorkspaceDigest(workspacePath!) : Promise.resolve(null);
     let fixtures: LiveFixtureValues | undefined;
     let reviewProvider: Awaited<ReturnType<typeof setupConnectionReview>> | undefined;
     let issue: IssueRecord | undefined;
@@ -814,6 +827,10 @@ for (const execution of executions) {
     });
 
     try {
+      if (execution.suite.id === "stock-harness") {
+        const receipt = verifyStockHarnessPreflight(process.env[STOCK_PREFLIGHT_ENV]);
+        await writeSanitizedJson(snapshotsDir, "stock-harness-preflight.json", receipt, secrets);
+      }
       const experimental = await api.patch<{
         enableNativeRunner: boolean;
       }>("/api/instance/settings/experimental", {
@@ -841,6 +858,30 @@ for (const execution of executions) {
         credentials,
         daytonaImage: process.env.PAPERCLIP_E2E_DAYTONA_IMAGE,
       });
+
+      if (execution.suite.id === "native-completion") {
+        const receipt = await captureNativeDefault({ api, agentId: fixtures.agent.id, companyId: fixtures.company.id });
+        const grade = gradeNativeDefault(receipt);
+        await writeSanitizedJson(snapshotsDir, "native-default-before-execution.json", { receipt, grade }, secrets);
+        if (!grade.passed) throw new Error("Native production-default hire admission failed before execution");
+        const [issues, agents, workspaceDigest] = await Promise.all([
+          api.get<Array<{ id: string }>>(`/api/companies/${fixtures.company.id}/issues?limit=100`),
+          api.get<Array<{ id: string }>>(`/api/companies/${fixtures.company.id}/agents`), nativeWorkspaceDigest(),
+        ]);
+        nativeInitial = { issueIds: issues.map(value => value.id), agentIds: agents.map(value => value.id), workspaceDigest };
+      }
+
+      if (execution.suite.id === "stock-harness") {
+        const hire = await captureStockHarness({ api, companyId: fixtures.company.id,
+          agentId: fixtures.agent.id, generation: execution.profile.generation, runIds: [] });
+        const checks = gradeStockHire(hire);
+        await writeSanitizedJson(snapshotsDir, "stock-harness-hire.json", {
+          capturePhase: "before-provider", ...hire, checks,
+        }, secrets);
+        const failed = checks.filter(check => !check.passed);
+        if (failed.length) throw new Error(`Stock hire matcher failures: ${failed.map(check => check.id).join(", ")}`);
+
+      }
 
       if (execution.suite.id === "api-response-reading") {
         const source = await api.post<{ id: string }>(`/api/companies/${fixtures.company.id}/issues`, {
@@ -2574,6 +2615,8 @@ for (const execution of executions) {
         await expect(proofLink).toHaveAttribute("href", `/api/attachments/${downloadedResponseProof!.attachmentId}/content`);
       } else if (execution.suite.id === "task-titles") {
         await expect(visibleAgentReplies.filter({ hasText: marker }).last()).toBeVisible({ timeout: 30_000 });
+      } else if (execution.suite.id === "native-completion" && execution.task.id === "native-blocked-report") {
+        await assertNativeBlockerReply(visibleAgentReplies, marker);
       } else if (execution.task.flow === "warm_three_turn") {
         // Prove the persisted user-facing response is visible, independently
         // of the byte-for-byte workspace checks and lease continuity checks.
@@ -2632,6 +2675,31 @@ for (const execution of executions) {
           `Runtime invariant failure: ${invariantFailures.join("; ")}`,
         );
       }
+      }
+      if (execution.suite.id === "native-completion") {
+        if (!issue || !nativeInitial) throw new Error("Missing native qualification issue or pre-execution receipt");
+        const [currentIssue, companyRuns, issues, agents, comments, documents, interactions, workspaceDigest] = await Promise.all([
+          api.get<IssueRecord>(`/api/issues/${issue.id}`),
+          api.get<RunRecord[]>(`/api/companies/${fixtures.company.id}/heartbeat-runs?limit=100`),
+          api.get<Array<{ id: string }>>(`/api/companies/${fixtures.company.id}/issues?limit=100`),
+          api.get<Array<{ id: string }>>(`/api/companies/${fixtures.company.id}/agents`),
+          api.get<CommentRecord[]>(`/api/issues/${issue.id}/comments`),
+          api.get<IssueDocumentRecord[]>(`/api/issues/${issue.id}/documents`),
+          api.get<InteractionRecord[]>(`/api/issues/${issue.id}/interactions`), nativeWorkspaceDigest(),
+        ]);
+        const detailedRuns = await Promise.all(companyRuns.map(candidate => api.get<RunRecord>(`/api/heartbeat-runs/${candidate.id}`)));
+        selectedRuns = detailedRuns; issue = currentIssue;
+        const events = detailedRuns.length === 1 ? await collectRunEvents<RunEventRecord>((afterSeq, limit) => api.get(`/api/heartbeat-runs/${detailedRuns[0]!.id}/events?afterSeq=${afterSeq}&limit=${limit}`)) : [];
+        const observation = { caseId: execution.task.id as "assigned-skill-explicit-invocation" | "native-blocked-report",
+          companyId: fixtures.company.id, agentId: fixtures.agent.id, issue: currentIssue as unknown as Record<string, unknown>,
+          runs: detailedRuns as unknown as Record<string, unknown>[], comments: comments as unknown as Record<string, unknown>[], events: events as unknown as Record<string, unknown>[],
+          initial: nativeInitial, state: { issueIds: issues.map(value => value.id), agentIds: agents.map(value => value.id), documentCount: documents.length, interactionCount: interactions.length },
+          workspaceChanged: workspaceDigest !== nativeInitial.workspaceDigest, marker };
+        const grade = gradeNativeCompletion(observation);
+        const integrity = detailedRuns.flatMap(candidate => nativeRunEventIntegrityFailures(candidate, events));
+        await writeSanitizedJson(snapshotsDir, "native-completion.json", { observation, grade, integrity }, secrets);
+        matcherResults.push(...grade.checks.map(check => ({ matcher: { kind: "json_path" as const, path: `nativeCompletion.${check.id}`, expected: true }, passed: check.passed, detail: check.detail })));
+        if (!grade.passed || integrity.length) throw new Error(`Native completion qualification failed: ${[...grade.checks.filter(check => !check.passed).map(check => check.id), ...integrity].join("; ")}`);
       }
       if (runsCompletionUpdateProbe(execution) && credentials.OPENAI_API_KEY) {
         const qualification = completionQualityStatus(completionQuality);
@@ -2713,6 +2781,24 @@ for (const execution of executions) {
             const companyRuns = await api.get<RunRecord[]>(`/api/companies/${fixtures.company.id}/heartbeat-runs?limit=100`);
             selectedRuns = await Promise.all(companyRuns.map(run => api.get<RunRecord>(`/api/heartbeat-runs/${run.id}`)));
             await writeSanitizedJson(snapshotsDir, execution.task.flow === "first_task" ? "first-task-final-run-ledger.json" : "chat-final-run-ledger.json", selectedRuns, secrets);
+          }
+          if (execution.suite.id === "stock-harness") {
+            try {
+              const stock = await captureStockHarness({ api, companyId: fixtures.company.id,
+                agentId: fixtures.agent.id, generation: execution.profile.generation,
+                runIds: selectedRuns.map(run => run.id) });
+              const checks = gradeStockHarness(stock);
+              matcherResults.push(...checks.map(check => ({ matcher: { kind: "json_path" as const,
+                path: `stockHarness.${check.id}`, expected: true }, passed: check.passed, detail: check.detail })));
+              await writeSanitizedJson(snapshotsDir, "stock-harness.json", { ...stock, checks }, secrets);
+              const failures = checks.filter(check => !check.passed);
+              if (failures.length && !primaryError) primaryError = new Error(`Stock harness matcher failures: ${failures.map(check => check.id).join(", ")}`);
+            } catch (error) {
+              await writeSanitizedJson(snapshotsDir, "stock-harness-evidence-error.json", {
+                error: error instanceof Error ? error.message : String(error),
+              }, secrets);
+              if (!primaryError) primaryError = error;
+            }
           }
           await fixtures.teardown();
           cleanup = "passed";

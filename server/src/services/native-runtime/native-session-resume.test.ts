@@ -1876,6 +1876,12 @@ describe("rebindNativeSessionCheckpoint", () => {
         "sha256:5b7b302db36f7ed6686f9ea1ba70bbf79ebd7fabf86953b548d966a2bc38b648",
     },
     {
+      contract: "native completion tool guidance",
+      // Deployed v13 local catalog before canonical finish/block descriptions.
+      retainedFingerprint:
+        "sha256:68a51d34e091c55ee5d0d2b563153454dd727d72db16e6a27c358d342ae489c9",
+    },
+    {
       contract: "task-bound human-input description",
       // Deployed v9 still advertises the generic mock-task question description.
       retainedFingerprint:

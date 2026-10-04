@@ -77,12 +77,31 @@ Daytona paths. Its [fixture contract](../tests/runner-e2e/README.md) distinguish
 startup cancellation from active response cancellation and HTTP send replay
 from ambiguous provider action recovery. Select it explicitly; `--all` excludes it.
 
+The explicit-only [production hiring templates suite](../tests/runner-e2e/README.md#production-hiring-templates)
+adds two local native Codex/Claude cells. It exercises API-created production
+CEO defaults, an explicitly requested hiring skill/reference read, a permanent
+coder hire, independently computed saved JSON fixtures and worker reuse.
+Each cell requires five work turns and admits at most two strictly attributed
+server task-completion turns. Every actual run remains counted; unknown or
+extra-work turns fail. Source/read coverage and workflow outcome are
+separate: missing read provenance leaves the candidate/baseline pair
+uncomparable even if work succeeds. Baseline bundles and coder examples derive
+from their own source revision, without requiring candidate wording or length.
+
 The explicit-only `context-integrity` Product E2E suite covers ordered public
 comment continuation and explicit invocation of an assigned pinned skill across
 the seven selected legacy/native local profiles. Select it by suite or exact
 execution ID because `--all` excludes explicit-only suites. Each cell applies a
 1,000-cent company and agent budget hard stop before task creation and records
 both limits in its evidence.
+
+The explicit-only [stock-harness suite](../tests/runner-e2e/STOCK-HARNESS.md)
+reuses skill, ordered-continuation, and chat-restart journeys across eight local
+legacy/native profiles with production-default hires. It closes the custom QA
+manual coverage gap. Its required credential-free prerequisite maps vendor
+instruction layering, the tiny hire bundle, and shared startup/resume reductions
+to executable checks. The 24 live cells are configured; no live qualification is
+claimed from their setup or unit calibration.
 
 The explicit-only `agent-chat-stories` suite covers the experimental settings
 lifecycle for a configured native agent and follow-ups during active work. Its
@@ -377,3 +396,5 @@ The explicit-only Product E2E `confirmation-replies` suite tests conversational
 approval and rejection, persisted message provenance, approval before execution,
 ambiguous proposals, and the existing card-click path with native Claude/Codex.
 See the [suite contract](../tests/runner-e2e/README.md#conversational-confirmation-replies-explicit-only).
+
+Hiring notification accounting now also requires exact completed action attribution. Missing native/provider ID mapping is uncomparable evidence; it must not be reported as a model task regression or waived through name/order matching. The fixture waits for both known completion callbacks and settled bracketed observations, including the gap before pending outbox work becomes a wake. Strict action replay and original machine verdicts are retained separately.

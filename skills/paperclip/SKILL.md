@@ -1,10 +1,10 @@
 ---
 name: paperclip
 description: >
-  Interact with the Paperclip control plane API for task coordination and
-  governance. Use when checking assignments, updating issue status, posting
-  comments, delegating work, managing routines, or calling Paperclip API
-  endpoints.
+  Use for Paperclip-managed tasks and heartbeats: reading task context, delivering
+  task documents or files, updating completion or blockers, coordinating or
+  delegating work, and following company governance. Includes control plane API
+  operations for assignments, comments, approvals, and routines.
 ---
 
 # Paperclip Skill
@@ -14,6 +14,8 @@ You run in **heartbeats** — short execution windows triggered by Paperclip. Ea
 ## Terminology
 
 In Paperclip, **task** and **issue** refer to the same work item. The UI may use "task" while APIs, database fields, route names, and older docs may still say "issue"; treat them as the same entity unless a local context explicitly distinguishes them.
+
+**Task documents (API runtimes).** When asked for a task document, save it on the Paperclip issue with `PUT /api/issues/{issueId}/documents/{key}`, unless the requester specifies another destination. Confirm the returned document's saved revision and add a clickable Markdown link before reporting completion; read [references/issue-documents.md](references/issue-documents.md) for the payload and revision-safe updates. Downloadable files follow [Generated Artifacts and Work Products](#generated-artifacts-and-work-products).
 
 ## Authentication
 

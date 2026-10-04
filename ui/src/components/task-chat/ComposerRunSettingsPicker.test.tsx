@@ -55,6 +55,21 @@ afterEach(() => {
 });
 
 describe("composer assignee picker", () => {
+  it("lets the assignee and model use the available composer width", () => {
+    render(vi.fn(), vi.fn());
+    const trigger = container!.querySelector<HTMLButtonElement>('[data-testid="task-chat-composer-assignee"]');
+    const assignee = trigger!.querySelector('[data-testid="task-chat-composer-assignee-label"]');
+    const model = trigger!.querySelector('[data-testid="task-chat-composer-model-label"]');
+
+    expect(trigger?.className).toContain("max-w-full");
+    expect(trigger?.className).not.toContain("max-w-64");
+    expect(assignee?.className).toContain("min-w-0");
+    expect(assignee?.className).not.toContain("max-w-24");
+    expect(model?.className).toContain("min-w-0");
+    expect(assignee?.className).toContain("truncate");
+    expect(model?.className).toContain("truncate");
+  });
+
   it("finds assignees by their displayed role and harness", async () => {
     render(vi.fn(), vi.fn());
     await click("Select assignee, model and effort");

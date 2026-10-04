@@ -86,6 +86,9 @@ export const composerAgents: ComposerAgent[] = [
     { id: "kimi-code/kimi-for-coding", label: "K2.8 Preview" },
     { id: "kimi-code/k3", label: "K3" },
   ], manualPattern: "kimi-code/model" },
+  { id: "long-labels", name: "Alexandra Engineering Coordinator", role: "Engineering", harness: "Codex", adapterType: "codex_local", defaultModel: "gpt-5.6-sol", models: [
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol Extended Context Preview", detail: "Agent default" },
+  ], manualPattern: "Model ID, e.g. gpt-5.6-sol" },
 ];
 
 /** Share the capsule-avatar palettes used by the agent persona stories. */

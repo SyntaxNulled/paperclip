@@ -1,8 +1,10 @@
+import { isPreDispatchReviewWait } from "./pre-dispatch-review-wait.js";
 import { and, desc, eq, gt, inArray, not, or, sql } from "drizzle-orm";
 import { conversationRecoveryActionPredicate, getConversationOwnershipBlocker } from "./conversation-continuation.js";
 import { z } from "zod";
 import { agentWakeupRequests, chatConversations, chatEndpoints, heartbeatRuns, issueComments, issues, issueRecoveryActions, toolConnections, type Db } from "@paperclipai/db";
 import { canContinueCancelledRun, readRunCancellation } from "./run-cancellation.js";
+import { canRetryStoppedRun } from "./cancelled-native-startup.js";
 import { queuedCommentIdsFromWakePayload } from "./issue-queued-comment-queue.js";
 import { EXECUTION_RECONCILIATION_CAUSES, type ExecutionBlocker } from "@paperclipai/shared";
 
@@ -78,12 +80,16 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
         or consumed.context_snapshot->'wakeCommentIds' @> jsonb_build_array(${issueComments.id}::text)))`,
   )) : [];
   const cancellation = run ? readRunCancellation(run.resultJson) : null;
-  const runError = cancellation?.reason ?? (run?.status === "cancelled"
-    ? "Execution was cancelled; its source was not recorded."
-    : run?.error);
   const eligibleContinuation = Boolean(run && conversation?.assigneeAgentId === run.agentId &&
     !["done", "cancelled"].includes(conversation.status) && canContinueCancelledRun(run));
-  const [chatBinding] = eligibleContinuation ? await db.select({
+  const canRetry = Boolean(run && conversation?.assigneeAgentId === run.agentId &&
+    !["done", "cancelled"].includes(conversation.status) && await canRetryStoppedRun(db, run));
+  const runError = run && canRetry && isPreDispatchReviewWait(run)
+    ? "Waiting for review; this continuation never started."
+    : cancellation?.reason ?? (run?.status === "cancelled"
+      ? "Execution was cancelled; its source was not recorded."
+      : run?.error);
+  const [chatBinding] = eligibleContinuation || canRetry ? await db.select({
     state: chatConversations.state, endpointStatus: chatEndpoints.status,
     connectionStatus: toolConnections.status, connectionEnabled: toolConnections.enabled,
   }).from(chatConversations).leftJoin(chatEndpoints, and(
@@ -94,6 +100,7 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
     eq(chatConversations.companyId, companyId), eq(chatConversations.issueId, issueId),
   )).limit(1) : [];
   let nextAction = action.nextAction;
+  if (canRetry && !eligibleContinuation) nextAction += " Try again or send a new message to continue once the previous execution has stopped.";
   if (chatBinding) {
     if (chatBinding.state === "endpoint_removed" || !chatBinding.endpointStatus || chatBinding.endpointStatus === "archived") {
       nextAction = "This chat connection was removed. Inspect the stopped run and create a new task to continue the work.";
@@ -103,7 +110,7 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
     } else {
       nextAction = "Send a new chat message to continue this conversation.";
     }
-  } else if (run?.status === "cancelled" && !eligibleContinuation && action.cause === "legacy_execution_requires_reconciliation") {
+  } else if (run?.status === "cancelled" && !eligibleContinuation && !canRetry && action.cause === "legacy_execution_requires_reconciliation") {
     nextAction += " Inspect the run before sending a new message to request continuation.";
   }
 
@@ -117,6 +124,7 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
     runStatus: run?.status ?? null,
     runError: runError?.slice(0, 1024) ?? null,
     canContinue: eligibleContinuation && !chatBinding,
+    canRetry: canRetry && !chatBinding,
     savedMessageCount: saved.length,
   };
 }
