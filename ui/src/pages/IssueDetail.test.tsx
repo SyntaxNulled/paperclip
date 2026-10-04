@@ -1582,7 +1582,7 @@ describe("IssueDetail", () => {
     expect(windowOpen).not.toHaveBeenCalled();
   });
 
-  it.each(["comments", "description", "empty"])("reveals %s without waiting for supporting history unless the thread is empty", async (content) => {
+  it.each(["comments", "description", "empty"])("waits for supporting history before revealing %s", async (content) => {
     const history = createDeferred<[]>();
     mockIssuesApi.get.mockResolvedValue(createIssue({
       description: content === "description" ? "Saved task description" : null,
@@ -1600,7 +1600,7 @@ describe("IssueDetail", () => {
     });
     await waitForAssertion(() => {
       expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0]).toMatchObject({
-        initialHistoryPending: content === "empty",
+        initialHistoryPending: true,
       });
     });
     // Resolving metadata fills the same thread rather than replacing its content.

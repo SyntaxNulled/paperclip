@@ -2851,11 +2851,10 @@ export function TaskChatThread(props: TaskChatThreadProps) {
       ? !hydratedLogRunIds.has(run.id)
       : logsAreInitiallyHydrating;
   });
-  // Durable messages are useful immediately. Tool history can fill in around
-  // their stable anchors without concealing already-loaded replies. A thread
-  // with only runtime output still waits for that output before showing empty.
-  const historyPending = initialHistoryPending || (
-    comments.length === 0 && !issueBrief?.description && (planLoading || transcriptHistoryPending)
+  // Reveal the first conversation only after its run history is ready. Otherwise
+  // reasoning and tools insert above already-painted replies and move the page.
+  const historyPending = initialHistoryPending || transcriptHistoryPending || (
+    comments.length === 0 && !issueBrief?.description && planLoading
   );
   const historyError =
     initialHistoryError ||
