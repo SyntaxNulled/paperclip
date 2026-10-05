@@ -1333,6 +1333,50 @@ GET /api/approvals/{approvalId}/issues
 
 Then close or comment on linked issues to complete the workflow.
 
+### Decision queues, triage and retention
+
+Queues are the board's attention lists. An agent reads them to confirm that something it created is actually visible to a responder. Queue and triage writes are board-side operations.
+
+Route reference:
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET    | `/api/companies/:companyId/decision-queue-seed-rules` | The built-in seed catalogue (`prs`, `plans`, `questions`) with each seed's rules and signals |
+| GET    | `/api/companies/:companyId/decision-queues` | The queues that exist in this company, newest first, each with an `itemCount` |
+| POST   | `/api/companies/:companyId/decision-queues` | Create a queue (`201`, or `200` when the key already exists) |
+| PATCH  | `/api/companies/:companyId/decision-queues/:key` | Update `title`, `description`, `retentionDays`, `seedRulesEnabled` |
+| GET    | `/api/companies/:companyId/decision-queues/:key/items` | List the queue's attention items |
+| POST   | `/api/companies/:companyId/decision-queues/:key/items` | Add an existing attention item by `sourceKind` + `sourceId` |
+| DELETE | `/api/companies/:companyId/decision-queues/:key/items/:sourceKind/:sourceId` | Remove an item; optional body `{ "reason": "..." }` |
+| GET    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | One item's triage state, or `null` when nothing is triaged |
+| PUT    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | Set `decideBy` and/or `snoozedUntil` |
+| PATCH  | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId` | Set retention with `{ "keep": true\|false }` |
+| POST   | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId/archive` | Archive an item |
+| POST   | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId/revive` | Revive an archived item |
+
+**Seeded queues are created lazily.** `decision-queue-seed-rules` always lists `prs`, `plans` and `questions`, but a queue row is inserted only when at least one attention item matches that seed's signal (`issue_has_pull_request_work_product`, `plan_document_confirmation`, `ask_user_questions`). Until then:
+
+- `GET /api/companies/:companyId/decision-queues` does not list the key. It returns existing rows only.
+- `GET /api/companies/:companyId/decision-queues/:key/items` returns **404 `Decision queue not found`**, not an empty list.
+
+A 404 on a catalogued key therefore means "nothing matched this seed yet", not "wrong path". Do not retry it and do not create the queue yourself to work around it.
+
+To check whether one specific thing you created is visible to the board, query its triage state instead:
+
+```
+GET /api/companies/:companyId/decision-triage/issue_thread_interaction/:interactionId
+```
+
+`null` means nothing triaged the item into a queue, so the board cannot see it. For an approval request that is the signal to re-create it as a `request_confirmation` bound to the issue's plan document (see *Issue-thread confirmations*), which the `plans` seed does pick up — not to retry the call that produced the invisible item.
+
+Field rules:
+
+- `:key` is lowercase kebab-case, 1–80 chars (`^[a-z0-9]+(?:-[a-z0-9]+)*$`).
+- Create requires `key` and `title` (1–120); `description` (up to 2,000) and `retentionDays` (1–3,650) are optional. Update requires at least one field.
+- `:sourceKind` must be an attention source kind: `approval`, `decision`, `issue_thread_interaction`, `join_request`, `recovery_action`, plus the legacy read-only kinds `productivity_review`, `blocker_attention`, `review`, `failed_run`, `budget_alert`, `agent_error_alert`. `:sourceId` is 1–500 chars. An invalid pair returns **400 `Invalid attention source identity`**; a well-formed pair that does not exist returns **404 `Attention source not found`**.
+- Triage `decideBy` is `today`, `this_week`, `whenever`, or a calendar date `YYYY-MM-DD`; `snoozedUntil` is an ISO-8601 datetime with offset. Send at least one of them.
+- Every route requires a board user or an agent, plus access to the company. The authorization action is `decision_queue:read` for reads, `decision_queue:manage` for queue writes, and `decision_triage:manage` for triage and retention writes. A denied call returns 403 with the explanation.
+
 ---
 
 ## Issue Lifecycle
