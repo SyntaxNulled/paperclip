@@ -1244,7 +1244,9 @@ Field rules:
 - Optional `payload.defaultParentId` (issue UUID) parents every draft under one issue, unless that draft sets its own `parentId` or `parentClientKey`.
 - Envelope fields behave as for the other interaction kinds: `idempotencyKey` (up to 255), `title` (up to 240), `summary` (up to 1,000), `continuationPolicy` (default `"wake_assignee"`), `resolverPolicy`, `addresseeAgentId`, `addresseeUserId`, `sourceCommentId`, `sourceRunId`.
 
-Accept (board action, requires board/user role; agents creating the interaction cannot accept). Accept a subset by `clientKey`, and include every selected draft's `parentClientKey` ancestors:
+Accept is a responder action, not a board-only one. Under the default policy any teammate may accept: a board user, or an agent inside an authenticated run (without one the call returns `422 interaction_run_attribution_required`). Narrow it with `resolverPolicy: "human_only"` (an agent then gets `403 interaction_human_only`) or `"not_creator"` (the creating agent or creating run gets `403 interaction_creator_excluded`). An `addresseeUserId` excludes every agent; an `addresseeAgentId` limits acceptance to that agent or to a human.
+
+Accept a subset by `clientKey`, and include every selected draft's `parentClientKey` ancestors:
 
 ```json
 POST /api/issues/{issueId}/interactions/{interactionId}/accept
