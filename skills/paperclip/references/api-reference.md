@@ -1238,21 +1238,24 @@ Field rules:
 
 - `payload.version` is required and must be `1`. `payload.tasks` is required and holds 1–50 drafts.
 - Each task requires `clientKey` (1–120 chars, unique within the interaction) and `title` (1–240 chars). A repeated key is rejected with `clientKey must be unique within one interaction`.
-- Optional per task: `description` (multiline, up to 20,000 chars), `priority` (`critical`, `high`, `medium`, `low`), `workMode` (`standard`, `ask`, `planning`, `skill_test`), `parentClientKey` (the `clientKey` of another draft in the same batch, to nest suggestions) or `parentId` (an existing issue UUID), `projectId`, `goalId`, `billingCode` (up to 120 chars), `labels` (up to 20 strings of 48 chars), `hiddenInPreview`.
+- Optional per task: `description` (multiline, up to 20,000 chars), `priority` (`critical`, `high`, `medium`, `low`), `workMode` (`standard`, `ask`, `planning`, `skill_test`), `parentClientKey` (the `clientKey` of another draft in the same batch, to nest suggestions) or `parentId` (an existing issue UUID), `projectId`, `goalId`, `billingCode` (up to 120 chars).
+- `labels` and `hiddenInPreview` also pass validation. `hiddenInPreview` only affects the preview card, and `labels` is **not** copied to the created subtask, so do not rely on either to classify accepted work.
 - A task may set `assigneeAgentId` **or** `assigneeUserId`, never both: `Suggested tasks can only target one assignee`.
 - Optional `payload.defaultParentId` (issue UUID) parents every draft under one issue, unless that draft sets its own `parentId` or `parentClientKey`.
 - Envelope fields behave as for the other interaction kinds: `idempotencyKey` (up to 255), `title` (up to 240), `summary` (up to 1,000), `continuationPolicy` (default `"wake_assignee"`), `resolverPolicy`, `addresseeAgentId`, `addresseeUserId`, `sourceCommentId`, `sourceRunId`.
 
-Accept (board action, requires board/user role; agents creating the interaction cannot accept). Accept a subset by `clientKey`:
+Accept (board action, requires board/user role; agents creating the interaction cannot accept). Accept a subset by `clientKey`, and include every selected draft's `parentClientKey` ancestors:
 
 ```json
 POST /api/issues/{issueId}/interactions/{interactionId}/accept
 { "selectedClientKeys": ["identify"] }
 ```
 
-Omit `selectedClientKeys` to accept every draft. Do not send an empty array: the field accepts 1–50 unique keys, so `[]` fails validation. To accept nothing, reject the interaction instead. `rememberAction: true` records the choice for repeat routing. Reject takes an optional `reason` (up to 4,000 chars).
+Omit `selectedClientKeys` to accept every draft. Do not send an empty array: the field accepts 1–50 unique keys, and an empty selection is rejected with `Select at least one suggested task to accept`. To accept nothing, reject the interaction instead. Reject takes an optional `reason` (up to 4,000 chars).
 
-The saved interaction keeps your request in `payload` and the outcome in `result`: `createdTasks[]` (`clientKey`, `issueId`, `identifier`, `title`, `parentIssueId`, `parentIdentifier`), `skippedClientKeys[]`, and — when nothing was created — `outcome` (`skipped`, `withdrawn`, `issue_closed`, `addressee_deleted`) with `reason`. Read `result` before you report which subtasks exist: a suggestion is not a subtask until it appears in `createdTasks`.
+Selection rules, each a 422 when broken: an unknown key returns `Unknown suggested task clientKey: {clientKey}`, and a child selected without its parent returns `Suggested task {clientKey} requires its parent {parentClientKey} to also be selected`. `rememberAction` is accepted by the validator and ignored here; remembered permission applies to tool-review approvals only.
+
+The saved interaction keeps your request in `payload` and the outcome in `result`. Acceptance records `createdTasks[]` (`clientKey`, `issueId`, `identifier`, `title`, `parentIssueId`, `parentIdentifier`) and, for a partial accept, `skippedClientKeys[]` for the drafts nobody selected. Rejection records `rejectionReason`. Administrative outcomes use `outcome` (`skipped`, `withdrawn`, `issue_closed`, `addressee_deleted`) and may carry `reason`. Read `result` before you report which subtasks exist: a suggestion is not a subtask until it appears in `createdTasks`.
 
 Best practice:
 
