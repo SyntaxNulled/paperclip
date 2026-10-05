@@ -1368,7 +1368,7 @@ GET /api/companies/:companyId/decision-queues
 GET /api/companies/:companyId/decision-queues/:key/items
 ```
 
-The queue list carries `itemCount` only, so read the items of every queue that could hold the source — `plans`, `prs`, `questions` and any custom queue — before concluding that an item is unqueued. If none lists it, say exactly that in one comment: the item is not in a queue yet, and it can still appear when the feed is next collected.
+The queue list carries `itemCount` only, so read the items of every queue that could hold the source — `plans`, `prs`, `questions` and any custom queue — before concluding that an item is unqueued. Both the item list and `itemCount` are scoped to what the caller may read, so an item a responder can see may be missing from an agent's view. Report what you could see — "no queue I can read lists it" — and not that the item does not exist. If no queue you can read lists it, say that in one comment: the item is not in a queue you can see, and it can still appear when the feed is next collected.
 
 Before re-creating an approval request, read the issue's pending interactions (`GET /api/issues/:issueId/interactions`). When an agent creates a second `request_confirmation` on the same issue, the server supersedes the still-pending sibling and stamps its result with `outcome: "superseded_by_newer_request"`, so re-creating a card that was already valid replaces what the responder was looking at. Re-create only when no pending confirmation exists, or when the target document revision changed; otherwise report the queue state and stop.
 
