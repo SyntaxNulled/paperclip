@@ -1348,7 +1348,7 @@ Route reference:
 | GET    | `/api/companies/:companyId/decision-queues/:key/items` | List the queue's attention items |
 | POST   | `/api/companies/:companyId/decision-queues/:key/items` | Add an existing attention item by `sourceKind` + `sourceId` |
 | DELETE | `/api/companies/:companyId/decision-queues/:key/items/:sourceKind/:sourceId` | Remove an item; optional body `{ "reason": "..." }` |
-| GET    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | One item's triage state, or `null` when nothing is triaged |
+| GET    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | One item's triage state, or `null` when the item has no triage row |
 | PUT    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | Set `decideBy` and/or `snoozedUntil` |
 | PATCH  | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId` | Set retention with `{ "keep": true\|false }` |
 | POST   | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId/archive` | Archive an item |

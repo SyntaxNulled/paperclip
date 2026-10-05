@@ -30,7 +30,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
   },
   "GET /api/companies/{}/decision-triage/{}/{}": {
     "section": "Decision queues, triage and retention",
-    "description": "One item's triage state, or `null` when nothing is triaged"
+    "description": "One item's triage state, or `null` when the item has no triage row"
   },
   "PUT /api/companies/{}/decision-triage/{}/{}": {
     "section": "Decision queues, triage and retention",
