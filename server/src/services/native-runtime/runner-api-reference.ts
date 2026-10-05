@@ -6,7 +6,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
   },
   "GET /api/companies/{}/decision-queues": {
     "section": "Decision queues, triage and retention",
-    "description": "The queues that exist in this company, newest first, each with an `itemCount`"
+    "description": "The queues that exist in this company, most recently updated first, each with an `itemCount`"
   },
   "POST /api/companies/{}/decision-queues": {
     "section": "Decision queues, triage and retention",
@@ -38,7 +38,7 @@ export const runnerApiReference: Record<string, { section: string; description?:
   },
   "PATCH /api/companies/{}/decision-retention/{}/{}": {
     "section": "Decision queues, triage and retention",
-    "description": "Set retention with `{ \"keep\": true\\"
+    "description": "Set retention with `{ \"keep\": true }` to keep the item, or `false` to let retention apply"
   },
   "POST /api/companies/{}/decision-retention/{}/{}/archive": {
     "section": "Decision queues, triage and retention",

@@ -1342,7 +1342,7 @@ Route reference:
 | Method | Path | Description |
 | ------ | ---- | ----------- |
 | GET    | `/api/companies/:companyId/decision-queue-seed-rules` | The built-in seed catalogue (`prs`, `plans`, `questions`) with each seed's rules and signals |
-| GET    | `/api/companies/:companyId/decision-queues` | The queues that exist in this company, newest first, each with an `itemCount` |
+| GET    | `/api/companies/:companyId/decision-queues` | The queues that exist in this company, most recently updated first, each with an `itemCount` |
 | POST   | `/api/companies/:companyId/decision-queues` | Create a queue (`201`, or `200` when the key already exists) |
 | PATCH  | `/api/companies/:companyId/decision-queues/:key` | Update `title`, `description`, `retentionDays`, `seedRulesEnabled` |
 | GET    | `/api/companies/:companyId/decision-queues/:key/items` | List the queue's attention items |
@@ -1350,31 +1350,32 @@ Route reference:
 | DELETE | `/api/companies/:companyId/decision-queues/:key/items/:sourceKind/:sourceId` | Remove an item; optional body `{ "reason": "..." }` |
 | GET    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | One item's triage state, or `null` when the item has no triage row |
 | PUT    | `/api/companies/:companyId/decision-triage/:sourceKind/:sourceId` | Set `decideBy` and/or `snoozedUntil` |
-| PATCH  | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId` | Set retention with `{ "keep": true\|false }` |
+| PATCH  | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId` | Set retention with `{ "keep": true }` to keep the item, or `false` to let retention apply |
 | POST   | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId/archive` | Archive an item |
 | POST   | `/api/companies/:companyId/decision-retention/:sourceKind/:sourceId/revive` | Revive an archived item |
 
-**Seeded queues are created lazily.** `decision-queue-seed-rules` always lists `prs`, `plans` and `questions`, but a queue row is inserted only when at least one attention item matches that seed's signal (`issue_has_pull_request_work_product`, `plan_document_confirmation`, `ask_user_questions`). Until then:
+**Seeded queues are materialized lazily.** `decision-queue-seed-rules` always lists `prs`, `plans` and `questions`, but a queue row is inserted only when the attention feed is collected and at least one collected item matches that seed's signal (`issue_has_pull_request_work_product`, `plan_document_confirmation`, `ask_user_questions`). Collection happens in `GET /api/companies/:companyId/attention`, which is board-only (an agent gets `403 Board user context required`). Neither `GET .../decision-queues` nor `GET .../decision-queues/:key/items` triggers it. Until a queue row exists:
 
 - `GET /api/companies/:companyId/decision-queues` does not list the key. It returns existing rows only.
 - `GET /api/companies/:companyId/decision-queues/:key/items` returns **404 `Decision queue not found`**, not an empty list.
 
-A 404 on a catalogued key therefore means "nothing matched this seed yet", not "wrong path". Do not retry it and do not create the queue yourself to work around it.
+That 404 means "no queue row yet". It does **not** prove that no item matched: a matching item can exist while no board user has collected the feed since. An agent cannot collect it, so do not poll these routes and do not create the queue yourself to work around the 404.
 
-To check whether one specific thing you created is visible to the board, query its triage state instead:
+**Confirm visibility through queue membership, not through triage.** `GET .../decision-triage/:sourceKind/:sourceId` returns the item's triage row, and it returns `null` when nobody has set `decideBy`, `snoozedUntil` or `keep`. A seeded item can sit in a responder's queue and still have no triage row, so `null` is not evidence that the board cannot see your item. The visibility signal is queue membership:
 
 ```
-GET /api/companies/:companyId/decision-triage/issue_thread_interaction/:interactionId
+GET /api/companies/:companyId/decision-queues
+GET /api/companies/:companyId/decision-queues/plans/items
 ```
 
-`null` means nothing triaged the item into a queue, so the board cannot see it. For an approval request that is the signal to re-create it as a `request_confirmation` bound to the issue's plan document (see *Issue-thread confirmations*), which the `plans` seed does pick up — not to retry the call that produced the invisible item.
+If no queue lists the item, say exactly that in one comment — the item is not in any queue yet, and a responder has to collect the feed before it can appear. For an approval request, the fix is to re-create it as a `request_confirmation` bound to the issue's plan document (see *Issue-thread confirmations*), which the `plans` seed does pick up. It is not to retry the call that produced the unqueued item.
 
 Field rules:
 
 - `:key` is lowercase kebab-case, 1–80 chars (`^[a-z0-9]+(?:-[a-z0-9]+)*$`).
 - Create requires `key` and `title` (1–120); `description` (up to 2,000) and `retentionDays` (1–3,650) are optional. Update requires at least one field.
-- `:sourceKind` must be an attention source kind: `approval`, `decision`, `issue_thread_interaction`, `join_request`, `recovery_action`, plus the legacy read-only kinds `productivity_review`, `blocker_attention`, `review`, `failed_run`, `budget_alert`, `agent_error_alert`. `:sourceId` is 1–500 chars. An invalid pair returns **400 `Invalid attention source identity`**; a well-formed pair that does not exist returns **404 `Attention source not found`**.
-- Triage `decideBy` is `today`, `this_week`, `whenever`, or a calendar date `YYYY-MM-DD`; `snoozedUntil` is an ISO-8601 datetime with offset. Send at least one of them.
+- `:sourceKind` must be an attention source kind: `approval`, `decision`, `issue_thread_interaction`, `join_request`, `recovery_action`, plus the legacy kinds `productivity_review`, `blocker_attention`, `review`, `failed_run`, `budget_alert` and `agent_error_alert`, which no longer generate feed items but are still accepted where the source exists. `:sourceId` is 1–500 chars. An invalid pair returns **400 `Invalid attention source identity`**; a well-formed pair that does not exist returns **404 `Attention source not found`**.
+- Triage `decideBy` is `today`, `this_week`, `whenever`, or a calendar date `YYYY-MM-DD`; `snoozedUntil` is an ISO-8601 datetime with offset and must be within five years, or the call returns **422 `snoozedUntil must be within five years`**. Send at least one of the two.
 - Every route requires a board user or an agent, plus access to the company. The authorization action is `decision_queue:read` for reads, `decision_queue:manage` for queue writes, and `decision_triage:manage` for triage and retention writes. A denied call returns 403 with the explanation.
 
 ---
