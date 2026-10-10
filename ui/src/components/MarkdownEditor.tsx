@@ -82,6 +82,7 @@ export interface MentionOption {
 interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
+  ariaLabel?: string;
   placeholder?: string;
   className?: string;
   contentClassName?: string;
@@ -492,7 +493,10 @@ export function computeMentionMenuPosition(
   const desiredLeft = viewport.offsetLeft + anchor.viewportLeft + MENTION_MENU_CARET_GAP;
   const left = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
 
-  return { top, left };
+  // The menu can grow beyond its estimated width for long task names.
+  // Constrain its actual layout to the space remaining beside the caret.
+  const maxWidth = Math.max(0, viewport.offsetLeft + viewport.width - MENTION_MENU_PADDING - left);
+  return { top, left, maxWidth };
 }
 
 function getMentionMenuSize(optionCount: number): MentionMenuSize {
@@ -705,6 +709,7 @@ function applyMention(markdown: string, state: MentionState, option: Autocomplet
 export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>(function MarkdownEditor({
   value,
   onChange,
+  ariaLabel,
   placeholder,
   className,
   contentClassName,
@@ -1030,7 +1035,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       const option = mentionOptionByKey.get(`agent:${parsed.agentId}`);
       applyMentionChipDecoration(link, {
         ...parsed,
-        icon: parsed.icon ?? option?.agentIcon ?? null,
+        appearance: option?.agentAppearance,
       });
     }
   }, [mentionOptionByKey]);
@@ -1281,6 +1286,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     if (!looksLikeMarkdownPaste(rawText)) return;
 
     event.preventDefault();
+    // Lexical also handles paste on the editable element. Once Markdown is
+    // inserted here, prevent that handler from inserting the plain text again.
+    event.stopPropagation();
     ref.current.insertMarkdown(escapeUnsupportedAngleBrackets(normalizeMarkdown(rawText)));
   }, []);
 
@@ -1333,6 +1341,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         </div>
         <textarea
           ref={fallbackTextareaRef}
+          aria-label={ariaLabel}
           value={value}
           placeholder={placeholder}
           readOnly={readOnly}
@@ -1366,8 +1375,27 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         isDragOver && "ring-1 ring-primary/60 bg-accent/20",
         className,
       )}
+      onInputCapture={(event) => {
+        if (
+          !readOnly
+          && event.target instanceof HTMLElement
+          && event.target.closest('[contenteditable="true"]')
+        ) {
+          // Actual input may be the editor's first change. An intentional clear
+          // must not be mistaken for its programmatic empty mount reset.
+          initialChildOnChangeRef.current = false;
+        }
+      }}
       onKeyDownCapture={(e) => {
         if (readOnly) return;
+        if (
+          (e.key === "Backspace" || e.key === "Delete")
+          && e.target instanceof HTMLElement
+          && e.target.closest('[contenteditable="true"]')
+        ) {
+          // Lexical handles deletion on keydown and may suppress DOM input.
+          initialChildOnChangeRef.current = false;
+        }
         // Cmd/Ctrl+Enter to submit
         if (onSubmit && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
@@ -1470,6 +1498,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       <MarkdownEditorRichErrorBoundary onError={handleRichEditorRenderError}>
         <MDXEditor
           ref={setEditorRef}
+          translation={(key, fallback, interpolations = {}) =>
+            key === "contentArea.editableMarkdown" && ariaLabel
+              ? ariaLabel
+              : Object.entries(interpolations).reduce(
+                  (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+                  fallback,
+                )
+          }
           markdown={editorValue}
           iconComponentFor={editorIconFor}
           suppressHtmlProcessing
@@ -1534,6 +1570,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
             style={{
               top: mentionMenuPosition.top,
               left: mentionMenuPosition.left,
+              maxWidth: mentionMenuPosition.maxWidth,
               touchAction: "pan-y",
               WebkitOverflowScrolling: "touch",
             }}
