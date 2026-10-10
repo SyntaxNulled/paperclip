@@ -1253,7 +1253,7 @@ POST /api/issues/{issueId}/interactions/{interactionId}/accept
 { "selectedClientKeys": ["identify"] }
 ```
 
-Omit `selectedClientKeys` to accept every draft. Do not send an empty array: the field accepts 1–50 unique keys, and an empty selection is rejected with `Select at least one suggested task to accept`. To accept nothing, reject the interaction instead. Reject takes an optional `reason` (up to 4,000 chars).
+Omit `selectedClientKeys` to accept every draft. Do not send an empty array: the field accepts 1–50 unique keys, and an empty selection fails request validation with HTTP 400. To accept nothing, reject the interaction instead. Reject takes an optional `reason` (up to 4,000 chars).
 
 Selection rules, each a 422 when broken: an unknown key returns `Unknown suggested task clientKey: {clientKey}`, and a child selected without its parent returns `Suggested task {clientKey} requires its parent {parentClientKey} to also be selected`. `rememberAction` is accepted by the validator and ignored here; remembered permission applies to tool-review approvals only.
 
